@@ -1,0 +1,1741 @@
+---
+title: "EPIC ISF MMSD School Climate Analyses — Staff"
+author: "EPIC Research Team"
+date: "`r format(Sys.time(), '%A, %B %d, %Y %I:%M %p')`"
+output:
+  html_notebook:
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+  html_document:
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+# ------------------------------------------------------------
+# STEP 1: Install any missing packages
+# ------------------------------------------------------------
+packages <- c(
+  "readxl", "dplyr", "tidyr", "stringr", "psych",
+  "lavaan", "semTools", "ggplot2", "forcats",
+  "purrr", "tibble", "glue", "naniar",
+  "knitr", "kableExtra"
+)
+
+installed <- rownames(installed.packages())
+
+for (p in packages) {
+  if (!(p %in% installed)) {
+    install.packages(p)
+  }
+}
+
+# ------------------------------------------------------------
+# STEP 2: Load packages
+# ------------------------------------------------------------
+lapply(packages, library, character.only = TRUE)
+
+# ------------------------------------------------------------
+# STEP 3: Global options
+# ------------------------------------------------------------
+options(scipen = 999)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+```{css callout-styles, echo=FALSE}
+/* ── Factorability callout boxes ───────────────────────────────────────── */
+.callout-factorability {
+  background-color: #fffbea;
+  border-left: 5px solid #f4c430;
+  border-radius: 4px;
+  padding: 14px 18px;
+  margin: 16px 0;
+}
+.callout-factorability .callout-title {
+  font-weight: bold;
+  font-size: 1.05em;
+  color: #7a5c00;
+  margin-bottom: 6px;
+}
+.callout-factorability .callout-pass {
+  color: #2a6b2a;
+  font-weight: bold;
+}
+.callout-factorability .callout-warn {
+  color: #b85c00;
+  font-weight: bold;
+}
+.callout-factorability .callout-fail {
+  color: #b80000;
+  font-weight: bold;
+}
+```
+
+---
+
+# Overview
+
+This notebook analyzes MMSD **staff** school climate survey data using exploratory and confirmatory factor analysis (CFA), followed by a descriptive analysis of validated factor scores across schools and school years. The analysis is restricted to respondents with `secondary_survey_population == "Staff"` and uses the 58 items administered in both the Fall and Spring waves.
+
+## Study context and ISF program framing
+
+The data span three school years: **2022--23** (pre-program baseline), **2023--24**, and **2024--25** (ISF implementation years). The ISF program was introduced starting in 2023--24. The descriptive section examines how staff climate perceptions changed across these years, both overall and by school, to characterize the program context from the staff perspective. Staff perceptions are especially valuable as a complement to student data -- convergence or divergence between the two populations is itself an informative finding.
+
+## Item structure {.unnumbered}
+
+| Wave | N items | Notes |
+|---|---|---|
+| Both Fall and Spring | 58 | Used in pooled analysis |
+| Fall only | 4 | q325--q328; excluded pending coverage confirmation |
+| Spring only | 0 | None |
+
+## Analysis stages {.unnumbered}
+
+1. Data import, cleaning, and scoring
+2. Item coverage audit
+3. Missing data examination
+4. Descriptive analyses (item-level)
+5. Build pooled dataset
+6. Split-sample feasibility
+7. Reliability screening
+8. Factorability checks (KMO, Bartlett, VSS)
+9. Exploratory Factor Analysis (EFA)
+10. Item retention
+11. Confirmatory Factor Analysis (CFA) with FIML
+12. Final theory-guided CFA model
+13. Factor score extraction
+14. Descriptive summaries of factor scores
+15. ISF context: school-year descriptive trends
+
+---
+
+# Data Import, Cleaning, and Scoring
+
+```{r import-clean-score}
+# ============================================================
+# 1. Read raw data file
+# ============================================================
+
+mmsd_climate_raw <- read_excel(
+  "/Users/levchenko/Library/CloudStorage/Box-Box/WCER/2026/EPIC/mmsd_climate.xlsx",
+  .name_repair = "minimal"
+)
+
+
+# ============================================================
+# 2. Item key -- Staff
+# ------------------------------------------------------------
+# All staff items use the agreement_4 response scale.
+# wave = "both"      : 58 items in Fall and Spring
+# wave = "fall_only" : 4 items (q325-q328); parallel items
+#                      q371-q374 cover the same content in
+#                      both waves
+# reverse = FALSE    : no reverse-scored staff items
+#
+# Dimension labels are based on the q_dimension_primary
+# field in the raw data, simplified for factor labels:
+#   Wellbeing, Value_at_Work, Safety, Belonging,
+#   Student_Engagement, Peer_Relationships,
+#   Student_Adult_Relationships, Adult_Collegiality,
+#   Teasing_Bullying, Discipline_Safety, Fairness,
+#   Family_Relationships, Facilities
+# ============================================================
+
+item_key_staff <- tibble::tribble(
+  ~question_id, ~scale_type,    ~reverse, ~dimension,                      ~wave,       ~note,
+
+  # Well-being and Value
+  299,  "agreement_4", FALSE, "Wellbeing",                 "both",      "",
+  302,  "agreement_4", FALSE, "Value_at_Work",             "both",      "",
+
+  # Safety and Belonging
+  311,  "agreement_4", FALSE, "Safety_Belonging",          "both",      "",
+  312,  "agreement_4", FALSE, "Safety_Belonging",          "both",      "",
+  313,  "agreement_4", FALSE, "Safety_Belonging",          "both",      "",
+
+  # Perceptions of Student Engagement
+  314,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  315,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  316,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  317,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  318,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  319,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+  320,  "agreement_4", FALSE, "Student_Engagement",        "both",      "",
+
+  # Perceptions of Peer Relationships Among Students
+  321,  "agreement_4", FALSE, "Peer_Relationships",        "both",      "",
+  322,  "agreement_4", FALSE, "Peer_Relationships",        "both",      "",
+  323,  "agreement_4", FALSE, "Peer_Relationships",        "both",      "",
+  324,  "agreement_4", FALSE, "Peer_Relationships",        "both",      "",
+
+  # Student-Adult Relationships: Respect for Students (Fall-only; parallel to q371-374)
+  325,  "agreement_4", FALSE, "Student_Adult_Respect",     "fall_only", "Fall only; parallel to both-wave q371",
+  326,  "agreement_4", FALSE, "Student_Adult_Respect",     "fall_only", "Fall only; parallel to both-wave q372",
+  327,  "agreement_4", FALSE, "Student_Adult_Respect",     "fall_only", "Fall only; parallel to both-wave q373",
+  328,  "agreement_4", FALSE, "Student_Adult_Respect",     "fall_only", "Fall only; parallel to both-wave q374",
+
+  # Student-Adult Relationships: Student Willingness to Seek Help
+  329,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  330,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  331,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  332,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  333,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  334,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+  335,  "agreement_4", FALSE, "Student_Adult_Relationships", "both",    "",
+
+  # Adult Collegiality
+  336,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+  337,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+  338,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+  339,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+  340,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+  341,  "agreement_4", FALSE, "Adult_Collegiality",        "both",      "",
+
+  # Teasing and Bullying (all reverse-valence -- higher scores = more bullying)
+  342,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing (negatively valenced)",
+  343,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing",
+  344,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing",
+  345,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing",
+  346,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing",
+  347,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing",
+  348,  "agreement_4", FALSE, "Teasing_Bullying",          "both",      "higher score = more teasing (bullying pervasive)",
+
+  # Discipline and Safety
+  349,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "",
+  350,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "",
+  351,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "",
+  352,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "",
+  353,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "",
+  354,  "agreement_4", FALSE, "Discipline_Safety",         "both",      "reverse-valenced: challenges make consider leaving",
+
+  # Fairness
+  355,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+  356,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+  357,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+  358,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+  359,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+  360,  "agreement_4", FALSE, "Fairness",                  "both",      "",
+
+  # Family Relationships
+  361,  "agreement_4", FALSE, "Family_Relationships",      "both",      "",
+  362,  "agreement_4", FALSE, "Family_Relationships",      "both",      "",
+  363,  "agreement_4", FALSE, "Family_Relationships",      "both",      "",
+  364,  "agreement_4", FALSE, "Family_Relationships",      "both",      "",
+  365,  "agreement_4", FALSE, "Family_Relationships",      "both",      "",
+
+  # Facilities
+  366,  "agreement_4", FALSE, "Facilities",                "both",      "",
+
+  # Student-Adult Relationships: Respect for Students (both-wave; parallel to fall q325-q328)
+  371,  "agreement_4", FALSE, "Student_Adult_Respect",     "both",      "parallel to fall q325",
+  372,  "agreement_4", FALSE, "Student_Adult_Respect",     "both",      "parallel to fall q326",
+  373,  "agreement_4", FALSE, "Student_Adult_Respect",     "both",      "parallel to fall q327",
+  374,  "agreement_4", FALSE, "Student_Adult_Respect",     "both",      "parallel to fall q328"
+)
+
+# ============================================================
+# 3. Recode function (agreement_4 only for staff)
+# ============================================================
+
+recode_response_staff <- function(response) {
+  case_when(
+    response == "STRONGLY DISAGREE" ~ 1L,
+    response == "DISAGREE"          ~ 2L,
+    response == "AGREE"             ~ 3L,
+    response == "STRONGLY AGREE"    ~ 4L,
+    TRUE ~ NA_integer_
+  )
+}
+
+# ============================================================
+# 4. Filter to staff, clean, and score
+# ============================================================
+
+mmsd_staff_clean <- mmsd_climate_raw %>%
+  filter(survey_name == "Climate",
+         secondary_survey_population == "Staff") %>%
+  mutate(
+    school_year         = as.character(school_year),
+    staff_id            = as.character(stu_key),
+    year                = suppressWarnings(as.integer(str_extract(school_year, "^\\d{4}"))),
+    school_name         = as.character(school_name),
+    q_dimension_primary = as.character(q_dimension_primary),
+    iteration           = as.character(iteration) %>% str_trim() %>% str_to_title(),
+    run_date_time       = as.POSIXct(run_date_time),
+    response_clean      = response %>%
+      as.character() %>% str_trim() %>% str_squish() %>% str_to_upper()
+  )
+
+mmsd_staff_scored <- mmsd_staff_clean %>%
+  left_join(item_key_staff, by = "question_id") %>%
+  mutate(
+    item_score = recode_response_staff(response_clean)
+  ) %>%
+  arrange(staff_id, school_year, iteration, question_id, desc(run_date_time)) %>%
+  distinct(staff_id, school_year, iteration, question_id, .keep_all = TRUE)
+
+# Quality checks
+unmapped_responses <- mmsd_staff_scored %>%
+  filter(!is.na(response_clean), is.na(item_score)) %>%
+  count(question_id, q_text, response_clean, sort = TRUE)
+
+duplicate_check <- mmsd_staff_scored %>%
+  count(staff_id, school_year, iteration, question_id) %>%
+  filter(n > 1)
+
+cat("Unmapped responses (should be 0 rows):\n")
+unmapped_responses
+cat("\nDuplicate records (should be 0 rows):\n")
+duplicate_check
+```
+
+---
+
+# Item Coverage Audit
+
+```{r item-coverage-audit}
+item_wave_coverage <- mmsd_staff_scored %>%
+  filter(!is.na(dimension)) %>%
+  distinct(iteration, question_id, q_text, dimension) %>%
+  group_by(question_id, q_text, dimension) %>%
+  summarise(
+    in_fall   = any(iteration == "Fall"),
+    in_spring = any(iteration == "Spring"),
+    waves     = paste(sort(unique(iteration)), collapse = " + "),
+    .groups   = "drop"
+  ) %>%
+  mutate(wave_group = case_when(
+    in_fall & in_spring ~ "Both",
+    in_fall             ~ "Fall only",
+    in_spring           ~ "Spring only",
+    TRUE                ~ "Unknown"
+  )) %>%
+  arrange(wave_group, question_id)
+
+cat("Item wave coverage summary:\n")
+item_wave_coverage %>% count(wave_group, name = "n_items")
+
+cat("\nFull item table:\n")
+item_wave_coverage %>% select(question_id, wave_group, dimension, q_text)
+```
+
+**Note on Fall-only items (q325--q328).** These four items measure "Respect for Students" and have direct both-wave parallels in q371--q374, which use nearly identical wording and are included in the pooled analysis. Unless MMSD confirms that q325--q328 reached the full Fall staff sample, a Fall-only staff analysis cannot be attempted with these items.
+
+---
+
+# Missing Data Examination
+
+```{r missing-data-setup}
+# Both-wave items only
+both_wave_ids <- item_key_staff %>% filter(wave == "both") %>% pull(question_id)
+
+staff_wide_miss <- mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids) %>%
+  select(staff_id, school_year, iteration, question_id, item_score) %>%
+  mutate(question = paste0("q", question_id)) %>%
+  select(-question_id) %>%
+  pivot_wider(names_from = question, values_from = item_score)
+
+item_vars <- names(staff_wide_miss)[str_detect(names(staff_wide_miss), "^q\\d+$")]
+
+cat("Wide dataset dimensions:\n")
+cat("  Rows (staff x administration):", nrow(staff_wide_miss), "\n")
+cat("  Item columns:                 ", length(item_vars), "\n")
+```
+
+```{r missing-overall-summary}
+item_miss_summary <- staff_wide_miss %>%
+  select(all_of(item_vars)) %>%
+  summarise(across(everything(), ~ mean(is.na(.x)))) %>%
+  pivot_longer(everything(), names_to = "item", values_to = "pct_missing") %>%
+  arrange(desc(pct_missing)) %>%
+  mutate(pct_missing = round(pct_missing * 100, 1))
+
+cat("Item-level missingness (%):\n")
+item_miss_summary
+
+cat("\nMissingness summary statistics:\n")
+summary(item_miss_summary$pct_missing)
+```
+
+```{r missing-row-level}
+staff_wide_miss <- staff_wide_miss %>%
+  mutate(
+    n_missing   = rowSums(is.na(across(all_of(item_vars)))),
+    pct_missing = round(n_missing / length(item_vars) * 100, 1)
+  )
+
+cat("Row-level completeness:\n")
+staff_wide_miss %>%
+  summarise(
+    n_complete        = sum(n_missing == 0),
+    n_partial         = sum(n_missing > 0 & n_missing < length(item_vars)),
+    n_all_missing     = sum(n_missing == length(item_vars)),
+    median_pct_miss   = round(median(pct_missing), 1),
+    pct_ge70_complete = round(mean(pct_missing <= 30) * 100, 1)
+  )
+```
+
+```{r missing-by-wave}
+staff_wide_miss %>%
+  group_by(iteration) %>%
+  summarise(
+    n_rows          = n(),
+    mean_pct_miss   = round(mean(pct_missing), 1),
+    median_pct_miss = round(median(pct_missing), 1),
+    pct_complete    = round(mean(n_missing == 0) * 100, 1),
+    .groups = "drop"
+  )
+```
+
+```{r missing-visualization}
+item_miss_summary %>%
+  mutate(item = fct_reorder(item, pct_missing)) %>%
+  ggplot(aes(x = item, y = pct_missing)) +
+  geom_col(fill = "#e15759", alpha = 0.85) +
+  coord_flip() +
+  labs(
+    title    = "Staff Survey: Item-Level Missingness",
+    subtitle = "Both-wave items (n = 58)",
+    x        = NULL,
+    y        = "Missing (%)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.y = element_text(size = 7))
+```
+
+```{r missing-distribution}
+staff_wide_miss %>%
+  mutate(miss_group = cut(pct_missing,
+                          breaks = c(-1, 0, 10, 20, 30, 50, 100),
+                          labels = c("0%", "1-10%", "11-20%", "21-30%", "31-50%", ">50%"))) %>%
+  count(miss_group, name = "n_rows") %>%
+  mutate(pct_rows = round(n_rows / sum(n_rows) * 100, 1))
+```
+
+**Interpretation.** The missingness summary characterizes the extent of missing data in the 58 both-wave staff items. Because the staff sample is considerably smaller than the student sample (n = 232 unique staff vs. n = 695 unique students), the effective sample for factor analysis is limited. Full Information Maximum Likelihood (FIML) is used in all CFA models to maximize the use of available data. The EFA uses pairwise-complete polychoric correlations for the same reason.
+
+---
+
+# Descriptive Analyses
+
+```{r descriptives-setup}
+# dimension already present in mmsd_staff_scored from the earlier
+# left_join(item_key_staff) in the scoring chunk -- no re-join needed.
+item_descriptives <- mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids, !is.na(item_score)) %>%
+  group_by(question_id, q_text, dimension) %>%
+  summarise(
+    n        = n(),
+    mean     = round(mean(item_score), 2),
+    sd       = round(sd(item_score), 2),
+    min      = min(item_score),
+    max      = max(item_score),
+    skewness = round(psych::skew(item_score), 2),
+    kurtosis = round(psych::kurtosi(item_score), 2),
+    .groups  = "drop"
+  ) %>%
+  arrange(dimension, question_id)
+
+cat("Item descriptive statistics (both-wave staff items):\n")
+item_descriptives %>% select(question_id, dimension, n, mean, sd, skewness, kurtosis, q_text)
+```
+
+```{r descriptives-by-dimension}
+dimension_descriptives <- item_descriptives %>%
+  group_by(dimension) %>%
+  summarise(
+    n_items       = n(),
+    mean_item_m   = round(mean(mean), 2),
+    sd_item_m     = round(sd(mean), 2),
+    min_item_m    = round(min(mean), 2),
+    max_item_m    = round(max(mean), 2),
+    .groups       = "drop"
+  ) %>%
+  arrange(desc(mean_item_m))
+
+cat("Dimension-level descriptive summary (average item means):\n")
+dimension_descriptives
+```
+
+```{r descriptives-by-wave}
+# dimension already present in mmsd_staff_scored
+wave_descriptives <- mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids, !is.na(item_score)) %>%
+  group_by(iteration, dimension) %>%
+  summarise(mean = round(mean(item_score), 2), n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = iteration, values_from = c(mean, n)) %>%
+  mutate(fall_spring_diff = round(mean_Spring - mean_Fall, 2))
+
+cat("Mean item scores by wave and dimension:\n")
+wave_descriptives
+```
+
+```{r descriptives-distributions}
+# dimension already present in mmsd_staff_scored
+mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids, !is.na(item_score)) %>%
+  ggplot(aes(x = factor(item_score))) +
+  geom_bar(fill = "#e15759", alpha = 0.8) +
+  facet_wrap(~ dimension, scales = "free_y", ncol = 3) +
+  labs(
+    title    = "Staff Survey: Item Response Distributions by Dimension",
+    subtitle = "Both-wave items, all administrations",
+    x        = "Item score",
+    y        = "Count"
+  ) +
+  theme_minimal(base_size = 11)
+```
+
+```{r descriptives-school-year}
+# dimension already present in mmsd_staff_scored
+mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids, !is.na(item_score)) %>%
+  mutate(year = str_extract(school_year, "^\\d{4}")) %>%
+  group_by(year, dimension) %>%
+  summarise(mean = round(mean(item_score), 2), n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = year, values_from = c(mean, n))
+```
+
+**Interpretation.** Staff response means reflect perceptions of student and school climate from the perspective of school adults. Note that items in the Teasing_Bullying dimension are negatively valenced -- higher scores indicate more perceived bullying and teasing, which is substantively opposite to the direction of most other items. Dimension-level means and Fall--Spring comparisons provide a preliminary view of whether staff perceptions differ across administrations or school years.
+
+---
+
+# Build Pooled Dataset
+
+```{r build-pooled-dataset}
+mmsd_staff_common_fa <- mmsd_staff_scored %>%
+  filter(question_id %in% both_wave_ids) %>%
+  select(staff_id, school_year, year, iteration, school_name, question_id, item_score) %>%
+  mutate(question = paste0("q", question_id)) %>%
+  select(-question_id) %>%
+  pivot_wider(names_from = question, values_from = item_score)
+
+common_item_vars   <- names(mmsd_staff_common_fa)[str_detect(names(mmsd_staff_common_fa), "^q\\d+$")]
+min_items_required <- ceiling(length(common_item_vars) * 0.70)
+
+mmsd_staff_common_fa <- mmsd_staff_common_fa %>%
+  mutate(n_nonmissing = rowSums(!is.na(across(all_of(common_item_vars))))) %>%
+  filter(n_nonmissing >= min_items_required) %>%
+  select(-n_nonmissing)
+
+cat("Pooled staff dataset\n")
+cat("  Rows (staff x administration):", nrow(mmsd_staff_common_fa), "\n")
+cat("  Unique staff members:         ", n_distinct(mmsd_staff_common_fa$staff_id), "\n")
+cat("  Items:                        ", length(common_item_vars), "\n")
+cat("  Min items required (70%):     ", min_items_required, "\n")
+```
+
+**Note on sample size.** The staff sample is substantially smaller than the student sample. Conventional guidelines suggest a minimum of 5--10 observations per item for factor analysis; with 58 items and ~232 staff members across multiple administrations, the effective N per item ratio warrants attention. Results should be interpreted with appropriate caution, and split-sample analysis may not be feasible given these sample constraints.
+
+---
+
+# Split-Sample Feasibility
+
+```{r split-sample}
+assess_split <- function(data, id_var = "staff_id",
+                         min_rows = 200, min_staff = 100, seed = 1234) {
+  set.seed(seed)
+  staff_split <- data %>%
+    distinct(.data[[id_var]]) %>%
+    mutate(split_sample = sample(c("EFA", "CFA"), n(), replace = TRUE))
+
+  split_data <- data %>% left_join(staff_split, by = id_var)
+
+  split_summary <- split_data %>%
+    group_by(split_sample) %>%
+    summarise(n_rows = n(), n_staff = n_distinct(.data[[id_var]]), .groups = "drop")
+
+  list(
+    split_data    = split_data,
+    split_summary = split_summary,
+    worth_it      = all(split_summary$n_rows >= min_rows) &&
+                    all(split_summary$n_staff >= min_staff)
+  )
+}
+
+staff_split <- assess_split(mmsd_staff_common_fa)
+
+cat("Split-sample feasible:", staff_split$worth_it, "\n\n")
+staff_split$split_summary
+
+if (staff_split$worth_it) {
+  efa_data <- staff_split$split_data %>% filter(split_sample == "EFA")
+  cfa_data <- staff_split$split_data %>% filter(split_sample == "CFA")
+} else {
+  message("Sample too small to split. Using full dataset for EFA and CFA.")
+  efa_data <- mmsd_staff_common_fa
+  cfa_data <- mmsd_staff_common_fa
+}
+
+efa_items <- efa_data %>% select(all_of(common_item_vars))
+
+cat("\nEFA subsample rows:", nrow(efa_data), "\n")
+cat("CFA subsample rows:", nrow(cfa_data), "\n")
+```
+
+---
+
+# Reliability Screening
+
+```{r reliability}
+compute_alpha_table <- function(data, scale_list) {
+  map_dfr(names(scale_list), function(nm) {
+    items <- intersect(scale_list[[nm]], names(data))
+    if (length(items) < 2) return(NULL)
+    a <- psych::alpha(data %>% select(all_of(items)),
+                      warnings = FALSE, check.keys = FALSE)
+    tibble(
+      scale     = nm,
+      n_items   = length(items),
+      raw_alpha = round(a$total$raw_alpha, 3),
+      std_alpha = round(a$total$std.alpha, 3),
+      avg_r     = round(a$total$average_r, 3),
+      label     = case_when(
+        raw_alpha >= .80 ~ "Strong",
+        raw_alpha >= .70 ~ "Acceptable",
+        raw_alpha >= .60 ~ "Marginal",
+        TRUE             ~ "Poor"
+      )
+    )
+  })
+}
+
+# Theoretical scales based on district dimension labels
+# Note: dimensions with only 1-2 items may show alpha limitations
+theory_scales_staff <- list(
+  Student_Engagement        = c("q314","q315","q316","q317","q318","q319","q320"),
+  Peer_Relationships        = c("q321","q322","q323","q324"),
+  Student_Adult_Respect     = c("q371","q372","q373","q374"),
+  Student_Adult_Seek_Help   = c("q329","q330","q331","q332","q333","q334","q335"),
+  Adult_Collegiality        = c("q336","q337","q338","q339","q340","q341"),
+  Teasing_Bullying          = c("q342","q343","q344","q345","q346","q347","q348"),
+  Discipline_Safety         = c("q349","q350","q351","q352","q353","q354"),
+  Fairness                  = c("q355","q356","q357","q358","q359","q360"),
+  Family_Relationships      = c("q361","q362","q363","q364","q365"),
+  Safety_Belonging          = c("q311","q312","q313")
+)
+
+reliability_table <- compute_alpha_table(mmsd_staff_common_fa, theory_scales_staff)
+cat("Internal consistency by theoretically defined scale:\n")
+reliability_table
+```
+
+**Interpretation.** Internal consistency estimates guide item selection for the EFA and CFA. Most of the district's theoretically defined staff scales show strong or acceptable reliability, reflecting that staff survey items within each dimension tend to measure coherent constructs. Scales with $\alpha < .60$ or average inter-item correlations below .20 suggest that the district's theoretical grouping does not correspond well to empirical factor structure for those dimensions, and EFA loadings should be examined before assigning those items to a factor. Single-item dimensions (Wellbeing q299, Value at Work q302, Facilities q366) cannot be evaluated for reliability and will be assessed by their EFA loading patterns -- items that load onto a larger empirical factor may be retained as part of that factor even if they originated from a single-item theoretical scale.
+
+---
+
+# Exploratory Factor Analysis (EFA)
+
+EFA is conducted using pairwise-complete polychoric correlations from the EFA subsample -- specifically, median imputation is applied to the item matrix before polychoric estimation, which is used only for the parallel analysis and factor grid steps and has no effect on CFA or descriptive results. Oblimin rotation allows factors to correlate, which is appropriate for school climate constructs. True FIML is applied at the CFA stage. The number of factors to extract is guided by parallel analysis, with additional consideration of theoretical interpretability and the practical requirement that extracted factors map onto interpretable constructs.
+
+## Factorability Checks
+
+Before running the EFA, three standard diagnostics confirm that the staff item correlation matrix contains enough shared variance to support factor analysis. All three use the same imputed item matrix and polychoric correlation matrix, which are computed once here and reused throughout the EFA section.
+
+```{r factorability-setup}
+# ============================================================
+# Compute the item matrix, median-imputed version, and
+# polychoric correlation matrix used by KMO, Bartlett, VSS,
+# and the parallel analysis / EFA model grid below.
+# Median imputation is applied only for polychoric estimation
+# and has no effect on CFA or descriptive results.
+# ============================================================
+
+set.seed(1234)
+
+efa_items_mat <- efa_items %>%
+  select(where(is.numeric)) %>%
+  as.matrix()
+
+efa_items_imputed <- apply(efa_items_mat, 2, function(x) {
+  x[is.na(x)] <- median(x, na.rm = TRUE)
+  x
+})
+
+poly_r_staff <- psych::polychoric(efa_items_imputed)$rho
+
+cat("Item matrix dimensions:", nrow(efa_items_mat), "rows x", ncol(efa_items_mat), "items\n")
+cat("Polychoric matrix computed: ", nrow(poly_r_staff), "x", ncol(poly_r_staff), "\n")
+```
+
+### Kaiser-Meyer-Olkin (KMO) Measure of Sampling Adequacy
+
+```{r kmo-test}
+# ============================================================
+# KMO: measures the proportion of variance in the items that
+# is likely due to common factors. Uses the polychoric
+# correlation matrix so that the ordinal item scale is
+# respected. Values >= .90 = "marvelous", .80-.89 = "meritorious",
+# .70-.79 = "middling", .60-.69 = "mediocre", < .60 = "miserable".
+# The overall MSA and per-item MSA values are both returned.
+# ============================================================
+
+kmo_result <- psych::KMO(poly_r_staff)
+
+cat("Overall KMO MSA:", round(kmo_result$MSA, 3), "\n\n")
+cat("Per-item MSA values:\n")
+sort(round(kmo_result$MSAi, 3))
+```
+
+<div class="callout-factorability">
+<div class="callout-title">&#x1F4CB; KMO Results and Interpretation</div>
+
+The overall KMO MSA is **<span class="callout-warn">0.626</span>**, which falls in Kaiser's **"mediocre"** range (.60 -- .69). This is lower than the ≥ .70 threshold typically recommended before proceeding with EFA, and well below the .80+ values common in well-designed survey batteries. The mediocre MSA is a direct consequence of the structural features of this dataset: a small staff sample (n = 221 rows across all administrations), 58 items spanning a wide range of loosely related school climate domains, and several near-isolate items (Facilities q366, Wellbeing q299, Value at Work q302) that share limited variance with any coherent item cluster. The overall MSA does not disqualify EFA here -- the theoretical rationale for the staff climate constructs is strong and the Bartlett test (below) confirms the items are far from uncorrelated -- but it does provide empirical context for why some factors emerge weakly and why item retention decisions must be made carefully.
+
+**Per-item MSA flags.** One item falls below the .50 threshold warranting serious consideration for removal prior to EFA:
+
+- <span class="callout-fail">**q313** (MSA = 0.405)</span> -- Safety/Belonging item. This is the weakest item in the battery by a notable margin and is a strong removal candidate independent of EFA loading quality.
+
+Three additional items fall in the .43 -- .49 range and warrant close monitoring during item retention:
+
+- <span class="callout-warn">**q359** (0.434)</span> -- Fairness
+- <span class="callout-warn">**q356** (0.444)</span> -- Fairness (already dropped for cross-loading in the current retention step)
+- <span class="callout-warn">**q318** (0.479)</span> -- Student Engagement
+
+The remaining items range from .52 to .76, with the highest MSA values concentrated among Student Engagement (q314, q315) and Adult Collegiality items -- which are also the most psychometrically cohesive subscales in the reliability screening. **Downstream action:** q313's MSA of 0.405 should be flagged in the item retention chunk and treated as an additional drop candidate; see updated notes there.
+</div>
+
+---
+
+### Bartlett's Test of Sphericity
+
+```{r bartlett-test}
+# ============================================================
+# Bartlett's test of sphericity: tests H0 that the population
+# correlation matrix is an identity matrix (i.e., all items
+# are uncorrelated). Rejection of H0 is a necessary -- but
+# not sufficient -- condition for factoring. With large n the
+# test almost always rejects; the chi-square and p-value are
+# reported here for completeness and documentation.
+# ============================================================
+
+bartlett_result <- psych::cortest.bartlett(
+  R      = poly_r_staff,
+  n      = nrow(efa_items_mat),
+  diag   = TRUE
+)
+
+cat("Bartlett's test of sphericity\n")
+cat("  Chi-square: ", round(bartlett_result$chisq,  2), "\n")
+cat("  df:         ", bartlett_result$df,             "\n")
+cat("  p-value:    ", format.pval(bartlett_result$p.value, digits = 3, eps = .001), "\n")
+```
+
+<div class="callout-factorability">
+<div class="callout-title">&#x1F4CB; Bartlett's Test Results and Interpretation</div>
+
+Bartlett's test is highly significant: $\chi^2$(1653) = 55,513.33, *p* < .001. The null hypothesis that the polychoric correlation matrix is an identity matrix is decisively rejected. The items are far from uncorrelated, and there is clearly shared variance available for factor extraction. **This is the expected result** for a multi-domain school climate battery and functions as a data-integrity confirmation rather than a meaningful diagnostic -- the large chi-square is partially an artifact of estimating Bartlett's statistic from a 58 x 58 polychoric matrix with 221 observations (1,653 degrees of freedom). No action is required on the basis of this result. Proceed to KMO and VSS for the substantive factorability evidence.
+</div>
+
+---
+
+### Very Simple Structure (VSS) Criterion
+
+```{r vss-test}
+# ============================================================
+# VSS (Very Simple Structure): evaluates candidate factor
+# solutions by how well they fit a simplified loading pattern
+# in which each item loads on at most one factor (complexity = 1)
+# or two factors (complexity = 2). The VSS criterion peaks at
+# the number of factors that provides the best fit under that
+# simplicity constraint. MAP (Velicer's Minimum Average Partial)
+# is also returned and provides a complementary empirical guideline.
+#
+# Uses the polychoric correlation matrix. n.obs is required
+# for accurate fit scaling. fa = "pc" uses principal components
+# internally for the VSS computation.
+# ============================================================
+
+vss_result <- psych::vss(
+  x      = poly_r_staff,
+  n      = 10,          # evaluate 1- through 10-factor solutions
+  n.obs  = nrow(efa_items_mat),
+  rotate = "oblimin",
+  fm     = "minres",
+  plot   = TRUE
+)
+
+cat("\nVSS summary (complexity 1 and 2 criteria):\n")
+vss_summary <- data.frame(
+  n_factors   = 1:10,
+  VSS_c1      = round(vss_result$cfit.1, 3),
+  VSS_c2      = round(vss_result$cfit.2, 3),
+  MAP         = round(vss_result$map,    4),
+  BIC         = round(vss_result$vss.stats$BIC, 1)
+)
+vss_summary
+
+cat("\nVSS complexity-1 peak at n factors:", which.max(vss_result$cfit.1), "\n")
+cat("VSS complexity-2 peak at n factors:", which.max(vss_result$cfit.2), "\n")
+cat("MAP minimum at n factors:          ", which.min(vss_result$map),    "\n")
+```
+
+<div class="callout-factorability">
+<div class="callout-title">&#x1F4CB; VSS and MAP Results and Interpretation</div>
+
+The three criteria tell a divergent story that is worth unpacking:
+
+| Criterion | Suggested *k* | Value |
+|---|---|---|
+| VSS complexity-1 peak | **1** | 0.845 |
+| VSS complexity-2 peak | **2** | 0.770 |
+| MAP minimum | **9** | 0.0257 |
+| BIC minimum (across 1--10) | **10** | 36,769.5 |
+| Parallel analysis | **9** | -- |
+
+**VSS complexity-1 (peak at 1 factor, c1 = 0.845):** The single-factor solution achieves the best fit under a strict one-loading-per-item constraint. This is the classic signature of a large general factor -- in this case, a broad "positive school climate" dimension that saturates most items. It does not mean a 1-factor model is adequate; it means that a single dominant variance component runs through the item pool. This general factor effect is common in school climate surveys and is one reason the overall KMO is in the mediocre range: many items correlate with each other primarily through this general factor rather than through tighter subscale-specific variance.
+
+**VSS complexity-2 (peak at 2 factors, c2 = 0.770):** When items are allowed to load on up to two factors, the best simple-structure solution uses only 2. This is another under-extraction signal driven by the general factor -- the VSS complexity-2 criterion is picking up the general factor plus one major split (likely positive vs. negative valence, given the Teasing/Bullying items). Both VSS values are products of this structural feature and should not be taken as meaningful factor count recommendations.
+
+**MAP minimum at 9 factors (MAP = 0.0257):** MAP is the most credible criterion here because it directly tests when residual common variance is exhausted. It recommends 9 factors, which aligns exactly with parallel analysis and is consistent with the theory-guided 9-factor CFA structure. The MAP value is nearly identical at 9 (0.0257) and 10 (0.0261), suggesting the 9th factor captures genuine variance while the 10th adds noise. **This is the key convergence point: MAP = 9, parallel analysis = 9, theory = 9.**
+
+**BIC minimum at 10:** BIC continues to decline through the full grid (42,039 at F1 down to 36,770 at F10), favoring more factors. This monotone decline is expected given the small item-to-respondent ratio -- BIC does not penalize over-extraction as strongly as MAP at these sample sizes.
+
+**Bottom line:** The VSS complexity values are driven by a dominant general factor in the item pool and should be disregarded for factor count selection in this case. MAP at 9 and parallel analysis at 9 are the operative empirical guidelines, and they align with the theory-guided 9-factor CFA structure. No change to the planned factor solution is warranted.
+</div>
+
+---
+
+## Parallel Analysis
+
+```{r parallel-analysis}
+# poly_r_staff and efa_items_mat computed in the factorability-setup chunk above
+fa.parallel(
+  poly_r_staff,
+  n.obs  = nrow(efa_items_mat),
+  fa     = "fa",
+  n.iter = 100,
+  main   = "Parallel Analysis: Staff EFA Subsample"
+)
+```
+
+**Interpretation.** Parallel analysis suggested retaining **9 factors**, which aligns with MAP (also 9) and the theory-guided 9-factor CFA structure. This convergence across two independent empirical criteria (MAP and parallel analysis) provides solid justification for the 9-factor solution. As noted in the VSS/MAP callout above, the VSS complexity values (c1 peak at 1, c2 peak at 2) are artifacts of a dominant general climate factor running through the item pool and do not represent actionable factor count guidance here. The BIC-minimizing F10 EFA solution is used as the screening tool for item retention because it provides the most granular look at item behavior, but the final reported CFA is the 9-factor theory-guided model.
+
+## EFA Helper Functions
+
+```{r efa-helpers}
+get_fit_summary <- function(model_list) {
+  map_dfr(names(model_list), function(nm) {
+    m <- model_list[[nm]]
+    tibble(
+      solution           = nm,
+      n_factors          = as.integer(gsub("F", "", nm)),
+      rmsr               = round(m$rms,      4),
+      tli                = round(m$TLI,       3),
+      rmsea              = round(m$RMSEA[1],  3),
+      bic                = round(m$BIC,       1),
+      variance_explained = round(sum(m$Vaccounted["Proportion Var", ]), 3)
+    )
+  })
+}
+
+get_loading_details <- function(model, cutoff = 0.30) {
+  tbl      <- as.data.frame(unclass(model$loadings))
+  tbl$item <- rownames(tbl)
+
+  long <- tbl %>%
+    pivot_longer(-item, names_to = "factor", values_to = "loading") %>%
+    mutate(abs_loading = abs(loading))
+
+  primary <- long %>%
+    group_by(item) %>%
+    slice_max(abs_loading, n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  flags <- long %>%
+    group_by(item) %>%
+    summarise(
+      max_loading    = max(abs_loading),
+      second_loading = sort(abs_loading, decreasing = TRUE)[2],
+      primary_factor = factor[which.max(abs_loading)],
+      weak_item      = max_loading < cutoff,
+      cross_loading  = second_loading >= cutoff,
+      .groups        = "drop"
+    )
+
+  list(primary = primary, flags = flags,
+       problem_items = flags %>% filter(weak_item | cross_loading))
+}
+
+summarize_model_grid <- function(model_list, cutoff = 0.30) {
+  left_join(
+    get_fit_summary(model_list),
+    map_dfr(names(model_list), function(nm) {
+      d <- get_loading_details(model_list[[nm]], cutoff)
+      tibble(solution = nm, n_weak = sum(d$flags$weak_item),
+             n_cross = sum(d$flags$cross_loading),
+             n_problem_items = nrow(d$problem_items))
+    }),
+    by = "solution"
+  )
+}
+
+run_efa_grid <- function(poly_r, n_obs, factor_grid, seed = 1234) {
+  # Accepts a pre-computed polychoric correlation matrix (poly_r) and
+  # n_obs used to estimate it. poly_r_staff was computed in the
+  # parallel analysis chunk above, so we reuse it here.
+  set.seed(seed)
+  models <- map(factor_grid, ~ psych::fa(
+    r = poly_r, nfactors = .x, n.obs = n_obs,
+    rotate = "oblimin", fm = "minres"
+  ))
+  names(models) <- paste0("F", factor_grid)
+  models
+}
+```
+
+## Fit Model Grid
+
+```{r efa-model-grid}
+# Parallel analysis will guide the upper bound; begin with 5 through 10
+# Adjust factor_grid based on parallel analysis output above
+efa_models <- run_efa_grid(poly_r_staff, n_obs = nrow(efa_items), factor_grid = 5:10)
+```
+
+## Compare Candidate Solutions
+
+```{r efa-comparison}
+efa_comparison <- summarize_model_grid(efa_models)
+cat("EFA fit comparison across factor solutions:\n")
+efa_comparison
+```
+
+**Interpretation.** The fit comparison table shows TLI, RMSEA, BIC, variance explained, and item quality statistics across solutions F5--F10. The auto-selected solution (F10 by BIC) provided the best empirical fit in this model grid, so it is used as the screening solution for the next step. That does not mean the 10-factor EFA is the final reporting structure. In this notebook, the EFA is used to identify weak or cross-loading items and to understand how the staff items cluster empirically, while the final reported model is the theory-guided CFA built around interpretable staff climate domains aligned with the ISF framework. Extra EFA factors beyond the core staff domains likely reflect narrow phrasing bundles or local dependencies rather than broad constructs worth reporting on their own.
+
+## Select and Inspect Final EFA Solution
+
+```{r choose-efa}
+# Auto-select solution by BIC; override manually if theory warrants
+selected_n <- efa_comparison %>%
+  filter(bic == min(bic)) %>%
+  pull(solution) %>%
+  first()
+
+cat("Auto-selected solution based on BIC:", selected_n, "\n")
+cat("Review and override selected_n manually if theoretically appropriate.\n\n")
+
+selected_details <- get_loading_details(efa_models[[selected_n]])
+
+cat("Problem items in", selected_n, "solution:\n")
+selected_details$problem_items
+
+cat("\n", selected_n, "loadings (cutoff = .30):\n")
+print(efa_models[[selected_n]]$loadings, cutoff = 0.30)
+
+cat("\nFactor intercorrelations (Phi):\n")
+efa_models[[selected_n]]$Phi
+```
+
+**Interpretation.** The selected EFA solution is used to identify the staff items that behave cleanly versus those that show weak anchoring or substantial overlap across factors. The loading matrix gives the item-level evidence, while the Phi matrix shows how strongly the exploratory factors relate to one another. In the staff survey, some empirical factors blend closely related domains such as discipline, fairness, and aspects of collegial climate. That blending is informative, but it is not by itself a reason to collapse those constructs in the final CFA, because the confirmatory stage is meant to test a cleaner, more interpretable measurement structure.
+
+## Primary Loading Table
+
+```{r primary-loading-table}
+primary_tbl <- selected_details$primary %>%
+  arrange(factor, desc(abs_loading))
+primary_tbl
+```
+
+---
+
+# Item Retention
+
+```{r item-retention}
+flag_drop_candidates <- function(problem_tbl, primary_cut = 0.40) {
+  problem_tbl %>%
+    mutate(likely_drop = weak_item | (cross_loading & max_loading < primary_cut)) %>%
+    arrange(desc(likely_drop), weak_item, desc(cross_loading), max_loading)
+}
+
+drop_candidates <- flag_drop_candidates(selected_details$problem_items)
+drop_candidates
+
+retain_items <- setdiff(
+  common_item_vars,
+  drop_candidates %>% filter(likely_drop) %>% pull(item)
+)
+
+cat("\nItems dropped:", paste(drop_candidates %>% filter(likely_drop) %>% pull(item), collapse = ", "), "\n")
+cat("Items retained:", length(retain_items), "\n")
+```
+
+**Interpretation.** Six items were dropped before the CFA based on EFA loading quality: q314, q315 (Student Engagement items with weak primary loadings and cross-loading onto another factor), q334, q335 (Student-Adult Seek Help items with split loadings), q356 (Fairness), and q361 (Family Relationships). Removing these items produces a cleaner item set for the CFA -- each retained item loads unambiguously onto one factor with a loading $\geq .30$ and no competing secondary loading of similar magnitude.
+
+**Note on q313 (KMO flag).** The KMO factorability check identified q313 (Safety/Belonging) as the weakest item in the battery by per-item MSA (0.405), well below the .50 threshold. However, q313's EFA primary loading is 0.421 with no flagged cross-loading, meaning it passes the EFA loading screen. Because q313 is one of only three Safety/Belonging items (q311, q312, q313) and dropping it would leave that subscale with only two indicators -- the minimum for identification in a CFA -- it is retained in the current model. Its low MSA reflects the relative isolation of the Safety/Belonging cluster from other item neighborhoods in this staff battery, not necessarily poor item quality within its own subscale. If model fit or modification indices suggest instability around q313 in the CFA, it should be revisited at that stage.
+
+The retained 52-item set is used for all subsequent CFA modeling.
+
+---
+
+# Draft CFA Structure from EFA
+
+```{r build-cfa-draft}
+build_factor_groups <- function(primary_tbl, retain_items) {
+  primary_tbl %>%
+    filter(item %in% retain_items) %>%
+    group_by(factor) %>%
+    summarise(items = list(item), n_items = n(), .groups = "drop") %>%
+    filter(n_items >= 3) %>%   # require at least 3 indicators per latent factor
+    arrange(desc(n_items), factor)
+}
+
+make_lavaan_model <- function(factor_groups, prefix = "F") {
+  syntax_lines <- map2_chr(
+    seq_len(nrow(factor_groups)),
+    factor_groups$items,
+    ~ paste0(prefix, .x, " =~ ", paste(.y, collapse = " + "))
+  )
+  paste(syntax_lines, collapse = "\n")
+}
+
+factor_groups <- build_factor_groups(primary_tbl, retain_items)
+cfa_model_efa <- make_lavaan_model(factor_groups, prefix = "C")
+
+cat("EFA-derived CFA factor groupings:\n")
+factor_groups %>% select(factor, n_items)
+
+cat("\nEFA-derived lavaan syntax:\n")
+cat(cfa_model_efa)
+```
+
+**Interpretation.** The EFA-derived syntax is included as a diagnostic checkpoint, not as the final substantive model. In the staff data, the exploratory grouping can mix items from nearby content domains when those domains are highly correlated in practice. That is useful evidence about the empirical structure, but the theory-guided CFA that follows is more defensible for reporting because it restores interpretable factor labels and tests whether those planned constructs can still fit the observed data adequately.
+
+---
+
+# CFA Helper Functions
+
+```{r cfa-helpers}
+# ============================================================
+# fit_cfa_fiml: FIML via MLR estimator
+# ------------------------------------------------------------
+# estimator = "MLR": robust ML with FIML for missing data.
+# Here the 4-point agreement items are treated as approximately
+# continuous so that all partially observed cases can be retained
+# under FIML. This is a deliberate analytic choice rather than
+# the only defensible estimator. A categorical estimator such as
+# WLSMV would be attractive for ordered items, but MLR + FIML is
+# used here because preserving information under missingness is a
+# central goal and the response scale is short, ordered, and close
+# enough to continuous for this application.
+# missing = "fiml": uses full information from all cases.
+# std.lv = TRUE: scales latent factors to unit variance.
+# ============================================================
+
+fit_cfa_fiml <- function(model_syntax, data, item_vars) {
+  lavaan::cfa(
+    model   = model_syntax,
+    data    = data %>% select(any_of(item_vars)),
+    estimator = "MLR",
+    std.lv  = TRUE,
+    missing = "fiml"
+  )
+}
+
+safe_extract_fit <- function(fit, label) {
+  if (!isTRUE(lavInspect(fit, "converged"))) {
+    return(tibble(model = label, converged = FALSE,
+                  chisq = NA_real_, df = NA_integer_,
+                  cfi = NA_real_, tli = NA_real_,
+                  rmsea = NA_real_, srmr = NA_real_))
+  }
+  tibble(
+    model     = label, converged = TRUE,
+    chisq     = round(as.numeric(fitMeasures(fit, "chisq")), 3),
+    df        = as.integer(fitMeasures(fit, "df")),
+    cfi       = round(as.numeric(fitMeasures(fit, "cfi")),   3),
+    tli       = round(as.numeric(fitMeasures(fit, "tli")),   3),
+    rmsea     = round(as.numeric(fitMeasures(fit, "rmsea")), 3),
+    srmr      = round(as.numeric(fitMeasures(fit, "srmr")),  3)
+  )
+}
+
+get_std_loadings <- function(fit, cutoff = 0.40) {
+  parameterEstimates(fit, standardized = TRUE) %>%
+    as_tibble() %>%
+    filter(op == "=~") %>%
+    transmute(factor = lhs, item = rhs,
+              est         = round(est,     3),
+              std_loading = round(std.all, 3),
+              weak_loading = std.all < cutoff) %>%
+    arrange(factor, desc(std_loading))
+}
+
+get_modindices <- function(fit, min_mi = 10) {
+  modindices(fit) %>%
+    as_tibble() %>%
+    filter(op %in% c("=~", "~~"), mi >= min_mi) %>%
+    mutate(parameter = paste(lhs, op, rhs)) %>%
+    select(parameter, mi, epc, sepc.all) %>%
+    arrange(desc(mi))
+}
+```
+
+---
+
+# Initial EFA-Derived CFA (Sanity Check)
+
+```{r fit-cfa-efa-derived}
+cfa_fit_efa <- fit_cfa_fiml(cfa_model_efa, cfa_data, retain_items)
+safe_extract_fit(cfa_fit_efa, "Staff EFA-derived CFA")
+```
+
+**Interpretation.** The EFA-derived CFA is used as a sanity check to confirm that the retained staff item set can support a converged latent model before imposing the theory-guided structure. Acceptable convergence here suggests the item pool is workable. It does not mean the EFA-derived factor labels are the best reporting solution; it simply shows that the retained items contain enough structure to move into the confirmatory stage.
+
+---
+
+# Final Theory-Guided CFA Model Comparison
+
+The final confirmatory stage compares two theory-guided staff CFA specifications that both respect the EFA screening results. The first is an 8-factor model that keeps q371--q374 inside PeerRelations. The second is a 9-factor model that separates those items into a distinct StudentAdultRespect factor, which is both more interpretable substantively and more faithful to the district item content. Both models use the EFA-pruned item pool, so the comparison focuses on whether the respect items are better treated as their own latent construct.
+
+```{r define-cfa-models}
+# ============================================================
+# Theory-guided CFA model comparison
+# ------------------------------------------------------------
+# Both candidate models use the EFA-pruned item set:
+#   dropped for weak/cross-loading = q314, q315, q334, q335,
+#   q356, q361
+#
+# Model 1 (8 factors): keeps q371-q374 inside PeerRelations
+# Model 2 (9 factors): splits q371-q374 into StudentAdultRespect
+# ============================================================
+
+cfa_items_pruned <- c(
+  "q336","q337","q338","q339","q340","q341",
+  "q316","q317","q318","q319","q320",
+  "q321","q322","q323","q324",
+  "q371","q372","q373","q374",
+  "q342","q343","q344","q345","q346","q347","q348",
+  "q349","q350","q351","q352","q353","q354",
+  "q355","q357","q358","q359","q360",
+  "q362","q363","q364","q365",
+  "q329","q330","q331","q332","q333"
+)
+
+cfa_model_8factor <- "
+F_Collegiality      =~ q336 + q337 + q338 + q339 + q340 + q341
+F_StudentEngagement =~ q316 + q317 + q318 + q319 + q320
+F_PeerRelations     =~ q321 + q322 + q323 + q324 + q371 + q372 + q373 + q374
+F_TeasingBullying   =~ q342 + q343 + q344 + q345 + q346 + q347 + q348
+F_Discipline        =~ q349 + q350 + q351 + q352 + q353 + q354
+F_Fairness          =~ q355 + q357 + q358 + q359 + q360
+F_Families          =~ q362 + q363 + q364 + q365
+F_SeekHelp          =~ q329 + q330 + q331 + q332 + q333
+"
+
+cfa_model_9factor <- "
+F_Collegiality        =~ q336 + q337 + q338 + q339 + q340 + q341
+F_StudentEngagement   =~ q316 + q317 + q318 + q319 + q320
+F_PeerRelations       =~ q321 + q322 + q323 + q324
+F_StudentAdultRespect =~ q371 + q372 + q373 + q374
+F_TeasingBullying     =~ q342 + q343 + q344 + q345 + q346 + q347 + q348
+F_Discipline          =~ q349 + q350 + q351 + q352 + q353 + q354
+F_Fairness            =~ q355 + q357 + q358 + q359 + q360
+F_Families            =~ q362 + q363 + q364 + q365
+F_SeekHelp            =~ q329 + q330 + q331 + q332 + q333
+"
+
+cat("8-factor model:
+")
+cat(cfa_model_8factor)
+cat("
+9-factor model:
+")
+cat(cfa_model_9factor)
+```
+
+```{r fit-cfa-models}
+cfa_fit_8factor <- fit_cfa_fiml(cfa_model_8factor, cfa_data, cfa_items_pruned)
+cfa_fit_9factor <- fit_cfa_fiml(cfa_model_9factor, cfa_data, cfa_items_pruned)
+
+fit_8factor <- safe_extract_fit(cfa_fit_8factor, "Staff theory-guided CFA (8-factor)")
+fit_9factor <- safe_extract_fit(cfa_fit_9factor, "Staff theory-guided CFA (9-factor)")
+
+bind_rows(fit_8factor, fit_9factor)
+```
+
+```{r cfa-model-comparison-table}
+cfa_model_comparison <- bind_rows(
+  fit_8factor %>% mutate(model = "8-factor"),
+  fit_9factor %>% mutate(model = "9-factor")
+) %>%
+  select(model, chisq, df, cfi, tli, rmsea, srmr)
+
+cfa_model_comparison
+```
+
+```{r cfa-model-comparison-deltas}
+cfa_comparison_deltas <- tibble(
+  metric = c("cfi", "tli", "rmsea", "srmr"),
+  `8-factor` = c(
+    fitMeasures(cfa_fit_8factor, "cfi"),
+    fitMeasures(cfa_fit_8factor, "tli"),
+    fitMeasures(cfa_fit_8factor, "rmsea"),
+    fitMeasures(cfa_fit_8factor, "srmr")
+  ),
+  `9-factor` = c(
+    fitMeasures(cfa_fit_9factor, "cfi"),
+    fitMeasures(cfa_fit_9factor, "tli"),
+    fitMeasures(cfa_fit_9factor, "rmsea"),
+    fitMeasures(cfa_fit_9factor, "srmr")
+  )
+) %>%
+  mutate(diff_9_minus_8 = `9-factor` - `8-factor`) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+cfa_comparison_deltas
+```
+
+**Interpretation.** The two CFA candidates are estimated on the same pruned staff item set, making this a direct test of whether q371--q374 should stay inside PeerRelations or be modeled as a distinct StudentAdultRespect factor. The 9-factor solution is preferred when it improves global fit and yields a cleaner substantive mapping of those four items.
+
+---
+
+# Final CFA Selected for Scoring and Plots
+
+The 9-factor model is used as the final reported model for the remainder of the notebook. This means all downstream factor-score extraction, summaries, and plots are based on the specification that treats q371--q374 as StudentAdultRespect.
+
+```{r select-final-cfa-model}
+cfa_fit_final   <- cfa_fit_9factor
+cfa_model_final <- cfa_model_9factor
+cfa_items_final <- cfa_items_pruned
+
+safe_extract_fit(cfa_fit_final, "Staff final theory-guided CFA (selected 9-factor model)")
+```
+
+```{r cfa-final-loadings}
+std_final <- get_std_loadings(cfa_fit_final)
+
+cat("Final model standardized loadings:
+")
+std_final
+
+cat("
+Indicators with standardized loading < .40:
+")
+std_final %>% filter(weak_loading)
+```
+
+```{r cfa-final-modindices}
+cat("Top modification indices for the final model (MI >= 10):
+")
+get_modindices(cfa_fit_final)
+```
+
+---
+
+# Latent Factor Correlations
+
+```{r latent-correlations}
+lavInspect(cfa_fit_final, "cor.lv") %>% round(3)
+```
+
+**Interpretation.** The final staff CFA is interpreted as a 9-factor model, including a distinct StudentAdultRespect factor. The latent correlation matrix should therefore be read as a test of whether the respect construct is related to, but empirically separable from, PeerRelations and the other staff climate domains.
+
+---
+
+# Extract Factor Scores
+
+```{r factor-scores}
+case_idx     <- as.integer(lavInspect(cfa_fit_final, "case.idx"))
+scores_final <- lavPredict(cfa_fit_final, type = "lv") %>% as_tibble()
+factor_names <- names(scores_final)
+
+cat("Sliced rows:", length(case_idx), "\n")
+cat("Score rows: ", nrow(scores_final), "\n")
+stopifnot(length(case_idx) == nrow(scores_final))
+
+cfa_data_scored <- cfa_data %>%
+  slice(case_idx) %>%
+  bind_cols(scores_final)
+
+dupe_check <- cfa_data_scored %>%
+  count(staff_id, school_year, iteration) %>%
+  filter(n > 1)
+
+cat("Duplicate rows in scored output:", nrow(dupe_check), "\n")
+
+cfa_data_scored %>%
+  select(staff_id, school_year, iteration, all_of(factor_names)) %>%
+  head()
+```
+
+**Interpretation.** Factor scores were extracted for all 221 rows with 0 duplicates. The full staff sample is used for both EFA and CFA because the 221-row dataset was too small to split (a 50/50 split would yield approximately 110 cases per subsample, below the minimum threshold for stable polychoric CFA estimation with 52 indicators). This means the CFA fit statistics and factor scores should be interpreted as in-sample estimates -- they characterize the measurement structure well but cannot be independently validated on a held-out subsample.
+
+---
+
+# Quick Diagnostic Check of Factor Score Spread
+
+```{r factor-score-descriptives}
+cfa_data_scored %>%
+  select(all_of(factor_names)) %>%
+  summarise(across(everything(), list(
+    mean = ~ round(mean(.x, na.rm = TRUE), 3),
+    sd   = ~ round(sd(.x,   na.rm = TRUE), 3),
+    min  = ~ round(min(.x,  na.rm = TRUE), 3),
+    max  = ~ round(max(.x,  na.rm = TRUE), 3)
+  )))
+```
+
+**Interpretation.** As standardized latent scores, these factor distributions should generally center near zero with standard deviations near one. This table is mainly a diagnostic check that no factor shows an implausibly narrow or erratic spread that would suggest instability. It also gives a quick sense of whether one factor is producing more extreme case variation than the others before the notebook moves into school-year and school-level descriptive summaries.
+
+---
+
+# Optional Row-Mean Scale Scores (Appendix-Style Diagnostic)
+
+```{r rowmean-scales}
+add_rowmean_scales <- function(data, scale_list, min_prop = 0.70) {
+  for (nm in names(scale_list)) {
+    items     <- intersect(scale_list[[nm]], names(data))
+    min_items <- ceiling(length(items) * min_prop)
+    data[[paste0(nm, "_mean")]] <- apply(
+      data[, items, drop = FALSE], 1,
+      function(x) if (sum(!is.na(x)) < min_items) NA_real_ else mean(x, na.rm = TRUE)
+    )
+  }
+  data
+}
+
+# Parallel row-mean summaries are retained only as a simple descriptive check alongside the latent-score results
+final_scale_items_staff <- list(
+  Collegiality        = c("q336","q337","q338","q339","q340","q341"),
+  StudentEngagement   = c("q316","q317","q318","q319","q320"),
+  PeerRelations       = c("q321","q322","q323","q324"),
+  StudentAdultRespect = c("q371","q372","q373","q374"),
+  TeasingBullying     = c("q342","q343","q344","q345","q346","q347","q348"),
+  Discipline          = c("q349","q350","q351","q352","q353","q354"),
+  Fairness            = c("q355","q357","q358","q359","q360"),
+  Families            = c("q362","q363","q364","q365"),
+  SeekHelp            = c("q329","q330","q331","q332","q333")
+)
+
+mmsd_staff_scales <- add_rowmean_scales(mmsd_staff_common_fa, final_scale_items_staff)
+
+cat("Row-mean scale score descriptives:\n")
+mmsd_staff_scales %>%
+  summarise(across(ends_with("_mean"), list(
+    mean = ~ round(mean(.x, na.rm = TRUE), 3),
+    sd   = ~ round(sd(.x,   na.rm = TRUE), 3),
+    min  = ~ round(min(.x,  na.rm = TRUE), 3),
+    max  = ~ round(max(.x,  na.rm = TRUE), 3)
+  )))
+```
+
+---
+
+# Descriptive Analysis of CFA Factor Scores
+
+> **Stage summary.** With the measurement model confirmed, we now use the validated factor scores and row-mean scale scores to describe staff perceptions of school climate. This section is purely descriptive -- no causal claims are made. The goal is to characterize how climate perceptions vary across school, school year, and survey wave from the staff perspective, and to identify where staff report the strongest and weakest conditions. Staff perceptions are especially valuable as a complement to student perceptions: alignment or divergence between the two groups can reveal important aspects of school climate that neither source captures alone.
+
+## Overall Factor Score Means and Distributions
+
+```{r desc-cfa-overall}
+# ============================================================
+# Overall descriptive summary of all CFA factor scores
+# ------------------------------------------------------------
+# Factor scores are standardized (mean ~0, SD ~1) by model
+# construction (std.lv = TRUE). Positive scores = above-average
+# staff perceptions; negative scores = below-average.
+# Note: TeasingBullying items are negatively valenced in the
+# raw data (higher raw score = more bullying perceived).
+# The factor score direction follows that valence -- interpret
+# positive TeasingBullying scores as more perceived bullying.
+# ============================================================
+
+factor_score_summary <- cfa_data_scored %>%
+  select(all_of(factor_names)) %>%
+  pivot_longer(everything(), names_to = "factor", values_to = "score") %>%
+  group_by(factor) %>%
+  summarise(
+    n      = sum(!is.na(score)),
+    mean   = round(mean(score, na.rm = TRUE), 3),
+    sd     = round(sd(score,   na.rm = TRUE), 3),
+    median = round(median(score, na.rm = TRUE), 3),
+    q25    = round(quantile(score, .25, na.rm = TRUE), 3),
+    q75    = round(quantile(score, .75, na.rm = TRUE), 3),
+    min    = round(min(score, na.rm = TRUE), 3),
+    max    = round(max(score, na.rm = TRUE), 3),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean))
+
+cat("Overall CFA factor score descriptives:\n")
+factor_score_summary
+```
+
+**Interpretation.** Factor scores are on a standardized metric (mean $\approx$ 0, SD $\approx$ 1). For most factors, higher scores indicate more positive staff perceptions of school climate. The exception is the Teasing/Bullying factor: because those items ask whether bullying and teasing are prevalent, a higher score on that factor means staff perceive more bullying -- a negative climate signal. The ranking of factors by mean score identifies which dimensions staff rate most and least favorably. Dimensions with wide interquartile ranges indicate high staff-level disagreement about climate conditions, which is itself a finding worth reporting to MMSD.
+
+```{r desc-cfa-distributions}
+cfa_data_scored %>%
+  select(all_of(factor_names)) %>%
+  pivot_longer(everything(), names_to = "factor", values_to = "score") %>%
+  ggplot(aes(x = score, fill = factor)) +
+  geom_density(alpha = 0.6, color = NA) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40", linewidth = 0.5) +
+  facet_wrap(~ factor, ncol = 3, scales = "free_y") +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title    = "Staff CFA Factor Score Distributions",
+    subtitle = "Dashed line = standardized mean of 0; note TeasingBullying is negatively valenced",
+    x        = "Factor score (standardized)",
+    y        = "Density",
+    fill     = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none")
+```
+
+**Interpretation.** The density plots show the full distribution of staff factor scores. A left-skewed distribution on positive-valence factors (e.g., Collegiality, Fairness) would suggest that while most staff rate conditions favorably, a meaningful minority holds substantially more negative views -- these are potential early warning signals. The TeasingBullying factor should be interpreted in reverse: a right-skewed distribution there means most staff see little bullying, but a tail of staff see it as a significant problem.
+
+## Factor Scores by School Year
+
+```{r desc-cfa-by-year}
+cfa_data_scored %>%
+  select(school_year, all_of(factor_names)) %>%
+  pivot_longer(all_of(factor_names), names_to = "factor", values_to = "score") %>%
+  group_by(factor, school_year) %>%
+  summarise(
+    n    = sum(!is.na(score)),
+    mean = round(mean(score, na.rm = TRUE), 3),
+    sd   = round(sd(score,   na.rm = TRUE), 3),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = school_year, values_from = c(n, mean, sd)) %>%
+  arrange(factor)
+```
+
+```{r desc-cfa-year-plot}
+year_means <- cfa_data_scored %>%
+  select(school_year, all_of(factor_names)) %>%
+  pivot_longer(all_of(factor_names), names_to = "factor", values_to = "score") %>%
+  group_by(factor, school_year) %>%
+  summarise(mean = mean(score, na.rm = TRUE), .groups = "drop")
+```
+
+```{r desc-cfa-by-school}
+school_means <- cfa_data_scored %>%
+  select(school_name, all_of(factor_names)) %>%
+  filter(!is.na(school_name)) %>%
+  pivot_longer(all_of(factor_names), names_to = "factor", values_to = "score") %>%
+  group_by(school_name, factor) %>%
+  summarise(
+    n    = sum(!is.na(score)),
+    mean = round(mean(score, na.rm = TRUE), 3),
+    sd   = round(sd(score,   na.rm = TRUE), 3),
+    .groups = "drop"
+  )
+
+cat("Staff factor score means by school:\n")
+school_means %>%
+  pivot_wider(names_from = factor, values_from = c(mean, n)) %>%
+  arrange(school_name)
+```
+
+
+## Row-Mean Scale Scores by School
+
+```{r desc-rowmean-by-school}
+scale_names_staff <- names(final_scale_items_staff)
+scale_cols_staff  <- paste0(scale_names_staff, "_mean")
+
+school_scale_means <- mmsd_staff_scales %>%
+  select(school_name, all_of(scale_cols_staff)) %>%
+  filter(!is.na(school_name)) %>%
+  pivot_longer(all_of(scale_cols_staff),
+               names_to  = "scale",
+               values_to = "score") %>%
+  mutate(scale = str_remove(scale, "_mean")) %>%
+  group_by(school_name, scale) %>%
+  summarise(
+    n    = sum(!is.na(score)),
+    mean = round(mean(score, na.rm = TRUE), 2),
+    sd   = round(sd(score,   na.rm = TRUE), 2),
+    .groups = "drop"
+  )
+
+cat("Row-mean scale score means (1-4 scale) by school:\n")
+school_scale_means %>%
+  pivot_wider(names_from = scale, values_from = c(mean, n)) %>%
+  arrange(school_name)
+```
+
+**Interpretation.** Row-mean scale scores (1--4) place staff perceptions on the original response scale, which is more interpretable for practitioners. A school mean of 3.0 on Collegiality means the average staff response was "Agree" that colleagues work well together. These scores are best used in practitioner-facing reports, while standardized factor scores are preferred for any formal comparisons. As before, note the directional reversal for TeasingBullying: a higher score means more perceived teasing and bullying, so lower row-mean scores on that scale are more favorable.
+
+## Distribution of Scale Scores Across Schools
+
+```{r desc-rowmean-boxplot}
+mmsd_staff_scales %>%
+  select(school_name, all_of(scale_cols_staff)) %>%
+  filter(!is.na(school_name)) %>%
+  pivot_longer(all_of(scale_cols_staff), names_to = "scale", values_to = "score") %>%
+  mutate(scale = str_remove(scale, "_mean")) %>%
+  ggplot(aes(x = fct_reorder(school_name, score, .fun = median, na.rm = TRUE),
+             y = score, fill = school_name)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 1, outlier.alpha = 0.4) +
+  facet_wrap(~ scale, ncol = 3, scales = "free_x") +
+  coord_flip() +
+  labs(
+    title    = "Staff Scale Score Distributions by School",
+    subtitle = "Row-mean scores (1-4 scale); schools sorted by median score",
+    x        = NULL,
+    y        = "Scale score (1 = low, 4 = high)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(legend.position = "none",
+        axis.text.y     = element_text(size = 8))
+```
+
+**Interpretation.** Box plots show the within-school distribution of staff scale scores, not just the average. Because there are relatively few staff per school, each individual's response carries more weight in shaping the school-level distribution. Wide boxes indicate substantial disagreement among staff within a school about climate conditions. Narrow boxes with all values bunched at the low end are the most concerning pattern, indicating broad consensus about poor climate.
+
+## Climate Profile Plot: Staff Perceptions by School
+
+```{r desc-cfa-profiles}
+profile_long <- school_means %>%
+  select(school_name, factor, mean)
+
+ggplot(profile_long, aes(x = factor, y = mean,
+                          color = school_name, group = school_name)) +
+  geom_point(size = 2.5) +
+  geom_line(linewidth = 0.7, alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40", linewidth = 0.5) +
+  scale_color_brewer(palette = "Set2") +
+  labs(
+    title    = "Staff Climate Profiles by School",
+    subtitle = "Mean CFA factor scores per school; dashed line = sample mean (0)\nNote: higher TeasingBullying = more perceived bullying",
+    x        = "Climate factor",
+    y        = "Mean factor score",
+    color    = "School"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+**Interpretation.** The profile plot reveals each school's overall climate signature from the staff perspective. Schools whose lines consistently track above zero across the positive-valence factors (and below zero on TeasingBullying) have the most favorable staff-reported climate profiles. Schools with inconsistent profiles -- high on some dimensions but low on others -- point to more specific areas of concern. Comparing these staff profiles to the analogous student profile plots in the Students Rmd is one of the most valuable descriptive exercises available from this dataset: where staff and student profiles align, there is convergent evidence about the true climate; where they diverge, the discrepancy itself is an important finding.
+
+## Summary Table for Reporting
+
+```{r desc-cfa-reporting-table}
+reporting_table_staff <- mmsd_staff_scales %>%
+  select(school_name, all_of(scale_cols_staff)) %>%
+  pivot_longer(all_of(scale_cols_staff), names_to = "scale", values_to = "score") %>%
+  mutate(scale = str_remove(scale, "_mean")) %>%
+  group_by(scale) %>%
+  summarise(
+    overall_n       = sum(!is.na(score)),
+    overall_mean    = round(mean(score, na.rm = TRUE), 2),
+    overall_sd      = round(sd(score, na.rm = TRUE), 2),
+    school_min_mean = round(min(
+      tapply(score, school_name, mean, na.rm = TRUE), na.rm = TRUE), 2),
+    school_max_mean = round(max(
+      tapply(score, school_name, mean, na.rm = TRUE), na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  mutate(school_mean_range = paste0("[", school_min_mean, ", ", school_max_mean, "]")) %>%
+  select(scale, overall_n, overall_mean, overall_sd, school_mean_range) %>%
+  arrange(desc(overall_mean))
+
+cat("Summary table for reporting (row-mean scores, 1-4 scale):\n")
+reporting_table_staff
+```
+
+**Interpretation.** This compact table is designed for practitioner-facing reports. It presents the overall mean and SD for each staff climate dimension on the original 1--4 response scale, along with the range of school-level means. A wide school mean range indicates that conditions vary substantially across MMSD schools from the staff perspective. Given the small staff sample size, this range should be interpreted with caution: extreme values at either end may reflect very small school-level $n$ rather than true systematic differences. Dimensions with consistently high school-level means across schools are areas of relative strength in the district; dimensions where all schools cluster near the low end of the scale are areas warranting district-wide attention.
+
+---
+
+# ISF Program Context: Climate Change Across School Years
+
+> **Stage summary.** This section describes how staff climate perceptions changed across the three data collection years: 2022--23 (pre-program baseline), 2023--24, and 2024--25 (ISF implementation years). All comparisons are purely descriptive. A key note for interpretation: the TeasingBullying factor is **negatively valenced** -- higher scores mean more perceived bullying. For all other factors, higher scores indicate more positive climate perceptions. An upward trend on TeasingBullying is therefore a negative signal, while a downward trend is positive.
+
+```{r isf-setup}
+# ============================================================
+# Label school years relative to ISF program onset
+# ============================================================
+
+isf_year_labels <- c(
+  "2022-2023" = "2022-23 (Pre-ISF)",
+  "2023-2024" = "2023-24 (Year 1)",
+  "2024-2025" = "2024-25 (Year 2)"
+)
+
+cfa_data_scored <- cfa_data_scored %>%
+  mutate(
+    year_label = recode(school_year, !!!isf_year_labels),
+    year_label = factor(year_label, levels = isf_year_labels)
+  )
+```
+
+## Overall Staff Climate Trends Across School Years
+
+```{r isf-overall-year-trend}
+year_order <- c("2022-23 (Pre-ISF)", "2023-24 (Year 1)", "2024-25 (Year 2)")
+
+year_means <- cfa_data_scored %>%
+  select(year_label, all_of(factor_names)) %>%
+  pivot_longer(all_of(factor_names), names_to = "factor", values_to = "score") %>%
+  group_by(factor, year_label) %>%
+  summarise(
+    n    = sum(!is.na(score)),
+    mean = mean(score, na.rm = TRUE),
+    se   = sd(score, na.rm = TRUE) / sqrt(sum(!is.na(score))),
+    .groups = "drop"
+  ) %>%
+  mutate(year_label = factor(year_label, levels = year_order))
+
+ggplot(year_means, aes(x = year_label, y = mean, group = 1)) +
+  geom_point(size = 2.5, color = "#4e79a7") +
+  geom_line(linewidth = 0.8, color = "#4e79a7") +
+  geom_errorbar(
+    aes(ymin = mean - se, ymax = mean + se),
+    width = 0.15,
+    linewidth = 0.5,
+    alpha = 0.6,
+    color = "#4e79a7"
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dotted",
+    color = "gray60",
+    linewidth = 0.4
+  ) +
+  facet_wrap(~ factor, scales = "free_y") +
+  labs(
+    title    = "Staff Climate Factor Scores by School Year",
+    subtitle = "District-wide means with ±1 SE bars\nNote: higher TeasingBullying = more perceived bullying (negatively valenced)",
+    x        = NULL,
+    y        = "Mean factor score (standardized)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 20, hjust = 1),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+**Interpretation.** These panels show district-wide mean staff factor scores across the three school years, one factor at a time. Error bars show $\pm$1 standard error. Because the staff sample is small (221 respondents across all three years), the year-level means should be read as descriptive context rather than precise estimates of change. For TeasingBullying, a downward trend from baseline is the favorable pattern because lower scores indicate less perceived bullying. For all other factors, upward trends indicate more positive staff perceptions.
+
+```{r isf-year-table}
+year_means %>%
+  select(factor, year_label, n, mean) %>%
+  mutate(mean = round(mean, 3)) %>%
+  pivot_wider(names_from = year_label, values_from = c(mean, n)) %>%
+  mutate(
+    change_yr1 = round(.[[paste0("mean_", isf_year_labels[2])]] -
+                       .[[paste0("mean_", isf_year_labels[1])]], 3),
+    change_yr2 = round(.[[paste0("mean_", isf_year_labels[3])]] -
+                       .[[paste0("mean_", isf_year_labels[1])]], 3)
+  ) %>%
+  rename(
+    `Change (Pre to Yr1)` = change_yr1,
+    `Change (Pre to Yr2)` = change_yr2
+  ) %>%
+  arrange(factor)
+```
+
+**Interpretation.** The change columns show each factor's shift from the 2022--23 baseline. For TeasingBullying, negative change values indicate improvement (less perceived bullying); for all other factors, positive change values indicate improvement. These are unadjusted descriptive differences that do not control for staff turnover, changes in school composition, or other concurrent programs. They characterize the program context rather than estimate program impact.
+
+## Staff Climate Trends by School and Year
+
+```{r isf-school-year-facet}
+school_year_means <- cfa_data_scored %>%
+  select(school_name, year_label, all_of(factor_names)) %>%
+  filter(!is.na(school_name)) %>%
+  pivot_longer(all_of(factor_names), names_to = "factor", values_to = "score") %>%
+  group_by(school_name, factor, year_label) %>%
+  summarise(
+    n    = sum(!is.na(score)),
+    mean = mean(score, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    year_label = factor(year_label, levels = isf_year_labels),
+    x = match(as.character(year_label), isf_year_labels)
+  )
+
+ggplot(school_year_means, aes(x = x, y = mean, color = school_name, group = school_name)) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 0.6, alpha = 0.85) +
+  geom_hline(yintercept = 0, linetype = "dotted",
+             color = "gray60", linewidth = 0.4) +
+  facet_wrap(~ factor, ncol = 3, scales = "free_y") +
+  scale_x_continuous(breaks = c(1, 2, 3), labels = isf_year_labels) +
+  scale_color_brewer(palette = "Set2") +
+  labs(
+    title    = "Staff Climate Factor Scores by School and Year",
+    subtitle = "Each line = one school
+TeasingBullying: downward trend = improving (less perceived bullying)",
+    x        = NULL,
+    y        = "Mean factor score",
+    color    = "School"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x     = element_text(angle = 25, hjust = 1, size = 7),
+    legend.position = "bottom"
+  )
+```
+
+**Interpretation.** School-level trajectories reveal heterogeneity that district-wide averages obscure. Schools where most lines rise from baseline on positive-valence factors (and fall on TeasingBullying) are showing broad climate improvement coinciding with ISF implementation. Schools with divergent or declining trajectories may be experiencing implementation challenges, leadership transitions, or other school-specific factors that warrant follow-up. Because each school contributes a very small number of staff respondents, year-to-year fluctuations in a single school's mean can reflect individual staff changes rather than true climate shifts.
+
+```{r isf-change-by-school}
+baseline_label <- isf_year_labels[1]
+
+baseline_means <- school_year_means %>%
+  filter(year_label == baseline_label) %>%
+  select(school_name, factor, baseline_mean = mean)
+
+change_table <- school_year_means %>%
+  filter(year_label != baseline_label) %>%
+  left_join(baseline_means, by = c("school_name", "factor")) %>%
+  mutate(change = round(mean - baseline_mean, 3)) %>%
+  select(school_name, factor, year_label, n, mean, baseline_mean, change)
+
+cat("Pre-to-post change in staff factor scores by school and year:\n")
+change_table %>%
+  select(school_name, factor, year_label, change) %>%
+  pivot_wider(names_from = year_label, values_from = change) %>%
+  arrange(school_name, factor)
+```
+
+  
+---
+
+# Export
+
+```{r export}
+# Update paths to match your local environment
+staff_analysis_final <- mmsd_staff_scales %>%
+  left_join(
+    cfa_data_scored %>%
+      select(staff_id, school_year, year, iteration, school_name,
+             all_of(factor_names)),
+    by = c("staff_id", "school_year", "year", "iteration", "school_name")
+  )
+
+write.csv(staff_analysis_final,
+          "mmsd_staff_climate_final_scored.csv",
+          row.names = FALSE)
+
+write.csv(std_final,
+          "mmsd_staff_final_loadings.csv",
+          row.names = FALSE)
+```
+
+
